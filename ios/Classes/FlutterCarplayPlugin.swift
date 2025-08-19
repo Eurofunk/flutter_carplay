@@ -198,16 +198,40 @@ public class FlutterCarplayPlugin: NSObject, FlutterPlugin {
             } else {
                 showAlertTemplate()
             }
-            func showAlertTemplate() {
-                let alertTemplate = FCPAlertTemplate(obj: rootTemplateArgs)
-                fcpPresentTemplate = alertTemplate
-                FlutterCarplaySceneDelegate
-                    .presentTemplate(template: alertTemplate.get, animated: animated, completion: { completed, _ in
-                        FCPStreamHandlerPlugin.sendEvent(type: FCPChannelTypes.onPresentStateChanged,
-                                                         data: ["elementId": elementId, "presented": completed])
-                        result(completed)
-                    })
-            }
+         func showAlertTemplate() {
+             let alertTemplate = FCPAlertTemplate(obj: rootTemplateArgs)
+             fcpPresentTemplate = alertTemplate
+
+             var didCallCompletion = false
+
+             FlutterCarplaySceneDelegate.presentTemplate(
+                 template: alertTemplate.get,
+                 animated: animated,
+                 completion: { completed, _ in
+                     didCallCompletion = true
+                     FCPStreamHandlerPlugin.sendEvent(
+                         type: FCPChannelTypes.onPresentStateChanged,
+                         data: ["elementId": elementId, "presented": completed]
+                     )
+                     result(completed)
+                 }
+             )
+
+             // Fallback if CarPlay ignores completion
+             // Due to unknown reasons, carplay sometimes does not execute the completion handler
+             // of presentTemplate() which leads to the method never finishing. If this happens
+             // we will complete on our own.
+             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                 if !didCallCompletion {
+                     FCPStreamHandlerPlugin.sendEvent(
+                         type: FCPChannelTypes.onPresentStateChanged,
+                         data: ["elementId": elementId, "presented": false]
+                     )
+                     result(false)
+                 }
+             }
+         }
+
 
         case FCPChannelTypes.setActionSheet:
             guard let args = call.arguments as? [String: Any],
