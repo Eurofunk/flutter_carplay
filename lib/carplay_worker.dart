@@ -41,9 +41,14 @@ class FlutterCarplay {
   /// A listener function that will be triggered when the active template changes.
   static FutureOr<void> Function()? _onActiveTemplateChanged;
 
+  /// The template history must not be modified during a push event, this can lead to a broken UI. The completer
+  /// ensures that nothing is changed during a push. Also see comment in _carPlayController.processFCPActiveTemplateChangedChannel()
+  static Completer? _pushCompleter;
+  static const _pushTemplateTimeout = Duration(seconds: 5);
+
   /// Creates an [FlutterCarplay] and starts the connection.
   FlutterCarplay() {
-    _eventBroadcast = _carPlayController.eventChannel.receiveBroadcastStream().listen((event) {
+    _eventBroadcast = _carPlayController.eventChannel.receiveBroadcastStream().listen((event) async {
       final receivedChannelType = CPEnumUtils.enumFromString(
         FCPChannelTypes.values,
         event['type'],
@@ -67,11 +72,14 @@ class FlutterCarplay {
             event['data']['itemElementId'],
           );
         case FCPChannelTypes.onActiveTemplateChanged:
+          if (_pushCompleter != null && _pushCompleter?.isCompleted == false) {
+            await _pushCompleter?.future;
+          }
+
           _carPlayController.processFCPActiveTemplateChangedChannel(
             event['data']['elementId'],
           );
           _onActiveTemplateChanged?.call();
-
         case FCPChannelTypes.onFCPListItemSelected:
           _carPlayController.processFCPListItemSelectedChannel(event['data']['elementId']);
         case FCPChannelTypes.onFCPAlertActionPressed:
@@ -96,6 +104,11 @@ class FlutterCarplay {
           break;
       }
     });
+  }
+
+  static void _resetPushCompleter() {
+    _pushCompleter?.complete();
+    _pushCompleter = null;
   }
 
   /// A function that will disconnect all event listeners from CarPlay. The action
@@ -438,13 +451,23 @@ class FlutterCarplay {
         template is CPSearchTemplate ||
         template is CPInformationTemplate ||
         template is CPPointOfInterestTemplate) {
+      _pushCompleter = Completer();
+
       final isSuccess = await _carPlayController.reactToNativeModule(FCPChannelTypes.pushTemplate, <String, dynamic>{
         'template': template.toJson(),
         'animated': animated,
         'runtimeType': 'F${template.runtimeType}',
-      });
+      }).timeout(
+        _pushTemplateTimeout,
+        onTimeout: () {
+          _resetPushCompleter();
+          return false;
+        },
+      );
+
       if (isSuccess) _carPlayController.addTemplateToHistory(template);
 
+      _resetPushCompleter();
       return isSuccess;
     } else {
       throw TypeError();
